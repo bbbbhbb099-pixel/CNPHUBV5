@@ -1,0 +1,828 @@
+-- Services
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local CoreGui = game:GetService("CoreGui")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- Xóa UI cũ nếu đã chạy trước đó
+if CoreGui:FindFirstChild("CustomMultiLangHub") then
+    CoreGui.CustomMultiLangHub:Destroy()
+end
+
+-- Tạo ScreenGui chính
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "CustomMultiLangHub"
+ScreenGui.Parent = CoreGui
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.ResetOnSpawn = false
+
+-- ==========================================
+-- ĐỒNG HỒ ĐẾM NGƯỢC MM2, MMV (NẰM SÁT MÉP TRÊN, TO RÕ, KHÔNG CÓ KHUNG HỘP)
+-- ==========================================
+local TimerLabel = Instance.new("TextLabel")
+TimerLabel.Name = "TopMatchTimer"
+TimerLabel.Size = UDim2.new(0, 200, 0, 50)
+-- Đặt dính sát lên mép trên cùng chính giữa màn hình, to bản và rõ nét
+TimerLabel.Position = UDim2.new(0.5, -100, 0, 5)
+TimerLabel.BackgroundTransparency = 1
+TimerLabel.Visible = false
+TimerLabel.Text = "03:00"
+TimerLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+TimerLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0) -- Viền đen chữ nổi bật
+TimerLabel.TextStrokeTransparency = 0.2
+TimerLabel.Font = Enum.Font.GothamBold
+TimerLabel.TextSize = 26 -- Phông chữ to rõ
+TimerLabel.Parent = ScreenGui
+
+local matchTimeRemaining = 180
+local isTimerRunning = false
+local lastDetectedTime = 180
+
+-- Tự động quét trạng thái sảnh / vào trận của MM2, MMV
+task.spawn(function()
+    while true do
+        if isTimerRunning then
+            local roundStarted = false
+            pcall(function()
+                -- Quét các giá trị thời gian và trạng thái round trong ReplicatedStorage của các game MM2/MMV
+                for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+                    if obj:IsA("NumberValue") or obj:IsA("IntValue") then
+                        local name = string.lower(obj.Name)
+                        if string.find(name, "time") or string.find(name, "duration") or string.find(name, "clock") then
+                            if obj.Value > 0 and obj.Value <= 900 then
+                                matchTimeRemaining = obj.Value
+                                roundStarted = true
+                                break
+                            end
+                        end
+                    end
+                end
+            end)
+
+            -- Nếu đang ở sảnh (thời gian đứng yên hoặc không có biến trận đấu), giữ nguyên mốc 03:00 (hoặc thời gian chuẩn)
+            -- Chỉ khi vào trận thực sự thì đồng hồ mới đếm ngược
+            if not roundStarted then
+                -- Logic dự phòng: Nếu game đếm lùi thì tự giảm, nếu đứng im ở sảnh thì reset về 180s
+                if matchTimeRemaining > 0 then
+                    matchTimeRemaining = matchTimeRemaining - 1
+                end
+            end
+
+            if matchTimeRemaining < 0 then matchTimeRemaining = 0 end
+
+            local mins = math.floor(matchTimeRemaining / 60)
+            local secs = matchTimeRemaining % 60
+            TimerLabel.Text = string.format("%02d:%02d", mins, secs)
+        else
+            matchTimeRemaining = 180 -- Đứng ở sảnh mặc định là 3 phút chờ
+            TimerLabel.Text = "03:00"
+        end
+        task.wait(1)
+    end
+end)
+
+-- ==========================================
+-- HỆ THỐNG TÂM TRÊN ĐẦU NHÂN VẬT (CHỈ HIỆN KHI LẠI GẦN)
+-- ==========================================
+local PROXIMITY_DISTANCE = 35 -- Khoảng cách gần mới hiện tâm
+
+local function UpdatePlayerMarkers()
+    local myChar = LocalPlayer.Character
+    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character then
+            local char = plr.Character
+            local head = char:FindFirstChild("Head")
+            local root = char:FindFirstChild("HumanoidRootPart")
+            local tool = char:FindFirstChildOfClass("Tool")
+
+            local markerGui = head and head:FindFirstChild("RoleMarkerGui")
+
+            local inRange = false
+            if myRoot and root then
+                local dist = (myRoot.Position - root.Position).Magnitude
+                if dist <= PROXIMITY_DISTANCE then
+                    inRange = true
+                end
+            end
+
+            if head and tool and inRange then
+                local toolName = string.lower(tool.Name)
+                local isMurderer = string.find(toolName, "knife") or string.find(toolName, "blade") or string.find(toolName, "dagger")
+                local isSheriff = string.find(toolName, "gun") or string.find(toolName, "revolver") or string.find(toolName, "pistol")
+
+                if isMurderer or isSheriff then
+                    if not markerGui then
+                        markerGui = Instance.new("BillboardGui")
+                        markerGui.Name = "RoleMarkerGui"
+                        markerGui.Size = UDim2.new(0, 40, 0, 40)
+                        markerGui.StudsOffset = Vector3.new(0, 2.5, 0)
+                        markerGui.AlwaysOnTop = true
+                        markerGui.Parent = head
+
+                        local dot = Instance.new("Frame")
+                        dot.Name = "Dot"
+                        dot.Size = UDim2.new(1, 0, 1, 0)
+                        dot.BackgroundTransparency = 1
+                        dot.Parent = markerGui
+
+                        local corner = Instance.new("UICorner")
+                        corner.CornerRadius = UDim.new(1, 0)
+                        corner.Parent = dot
+
+                        local stroke = Instance.new("UIStroke")
+                        stroke.Name = "Stroke"
+                        stroke.Thickness = 3
+                        stroke.Parent = dot
+                    end
+
+                    local dot = markerGui:FindFirstChild("Dot")
+                    if dot then
+                        local stroke = dot:FindFirstChild("Stroke")
+                        if isMurderer then
+                            stroke.Color = Color3.fromRGB(255, 0, 0) -- Tâm đỏ cho Kẻ giết người
+                        elseif isSheriff then
+                            stroke.Color = Color3.fromRGB(0, 255, 0) -- Tâm xanh lá cho Cảnh sát trưởng
+                        end
+                    end
+                    markerGui.Enabled = true
+                else
+                    if markerGui then markerGui.Enabled = false end
+                end
+            else
+                if markerGui then markerGui.Enabled = false end
+            end
+        end
+    end
+end
+
+RunService.RenderStepped:Connect(function()
+    pcall(UpdatePlayerMarkers)
+end)
+
+-- TÂM NGẮM GIỮA MÀN HÌNH
+local Crosshair = Instance.new("Frame")
+Crosshair.Name = "CenterCrosshair"
+Crosshair.Size = UDim2.new(0, 40, 0, 40)
+Crosshair.Position = UDim2.new(0.5, -20, 0.5, -20)
+Crosshair.BackgroundTransparency = 1
+Crosshair.Visible = false
+Crosshair.Parent = ScreenGui
+
+local CrosshairStroke = Instance.new("UIStroke")
+CrosshairStroke.Color = Color3.fromRGB(0, 255, 0)
+CrosshairStroke.Thickness = 2.5
+CrosshairStroke.Parent = Crosshair
+
+local CrosshairCorner = Instance.new("UICorner")
+CrosshairCorner.CornerRadius = UDim.new(1, 0)
+CrosshairCorner.Parent = Crosshair
+
+local CrosshairDot = Instance.new("Frame")
+CrosshairDot.Size = UDim2.new(0, 6, 0, 6)
+CrosshairDot.Position = UDim2.new(0.5, -3, 0.5, -3)
+CrosshairDot.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+CrosshairDot.BorderSizePixel = 0
+CrosshairDot.Parent = Crosshair
+
+local DotCorner = Instance.new("UICorner")
+DotCorner.CornerRadius = UDim.new(1, 0)
+DotCorner.Parent = CrosshairDot
+
+-- ID ảnh phần Update
+local Update1ImageId = "rbxassetid://13511479860"
+local Update2ImageId = "rbxassetid://130299219143870"
+
+-- Dữ liệu Đa Ngôn Ngữ
+local Languages = {
+    ["English"] = {
+        ExecuteBtn = "Execute Script",
+        ExecutedNotify = "Activated!",
+        UpdateBtnText = "Update",
+        TimerBtnOn = "Hide MM2 Timer",
+        TimerBtnOff = "Show MM2/MMV Game Timer",
+        Update1Title = "Update 1: The Beginning",
+        Update1Details = "This is the first update of this script. It took a lot of time, effort, and absolute dedication from the creator to make it happen!",
+        Update2Title = "Update 2: Coming Soon",
+        CountdownText = "Coming soon in: %d days",
+        Update2Details = "Coming in the next month! Counting down daily until release.",
+        Scripts = {
+            ["CNPHUBV1"] = { Desc = "This script includes gun color changing, walkspeed boost, high jump boost, old voice chat, and some other features." },
+            ["CNPHUBV2"] = { Desc = "This is an upgraded version of the first script with added features: YouTube music player, skin market & skin saver, and more!" },
+            ["Aimlock"] = { Desc = "Special Aimlock Feature: Select a target, lock your camera smoothly, auto-switch if they die, and use the center crosshair!" },
+            ["Hiện thời gian game MM2, MMV"] = { Desc = "MM2/MMV Game Timer: Automatically auto-scans match duration and displays a live countdown timer on screen." }
+        }
+    },
+    ["Tiếng Việt"] = {
+        ExecuteBtn = "Khởi Động Kịch Bản",
+        ExecutedNotify = "Đã Kích Hoạt!",
+        UpdateBtnText = "Cập Nhật",
+        TimerBtnOn = "Ẩn Đồng Hồ MM2",
+        TimerBtnOff = "Hiện thời gian game MM2, MMV",
+        Update1Title = "Update 1: Khởi Đầu Đầy Tâm Huết",
+        Update1Details = "Đây là bản cập nhật đầu tiên của kịch bản này. Người làm đã đặt hết quyết tâm, tốn rất nhiều thời gian và tâm huyết để tạo ra nó!",
+        Update2Title = "Update 2: Sắp Ra Mắt",
+        CountdownText = "Sắp ra mắt sau: %d ngày",
+        Update2Details = "Sắp cập nhật trong vòng 1 tháng tới! Đếm ngược từng ngày đến khi ra mắt.",
+        Scripts = {
+            ["CNPHUBV1"] = { Desc = "Kịch bản này gồm đổi màu súng, cuộn tốc độ, cuộn nhảy cao, voice chat cũ và một số cái khác." },
+            ["CNPHUBV2"] = { Desc = "Kịch bản này là bản nâng cấp của kịch bản thứ nhất, có thêm YouTube nghe nhạc, chợ đổi skin & lưu skin, cùng một số tính năng mới!" },
+            ["Aimlock"] = { Desc = "Chức năng đặc biệt Aimlock: Chọn mục tiêu ghim tâm, tự động chuyển người khác khi họ chết, tích hợp tâm ngắm bắn giữa màn hình!" },
+            ["Hiện thời gian game MM2, MMV"] = { Desc = "Đồng hồ MM2, MMV: Tự động quét thời gian trận đấu trong game và hiển thị đồng hồ đếm ngược trực quan lên màn hình." }
+        }
+    },
+    ["Indonesia"] = {
+        ExecuteBtn = "Jalankan Skrip",
+        ExecutedNotify = "Diaktifkan!",
+        UpdateBtnText = "Pembaruan",
+        TimerBtnOn = "Sembunyikan Timer MM2",
+        TimerBtnOff = "Hiện thời gian game MM2, MMV",
+        Update1Title = "Update 1: Awal yang Penuh Dedikasi",
+        Update1Details = "Ini adalah pembaruan pertama dari skrip ini. Pembuatnya telah mencurahkan banyak waktu, usaha, dan tekad penuh untuk mewujudkannya!",
+        Update2Title = "Update 2: Segera Hadir",
+        CountdownText = "Segera hadir dalam: %d hari",
+        Update2Details = "Segera hadir dalam sebulan ke depan! Menghitung mundur setiap hari hingga rilis.",
+        Scripts = {
+            ["CNPHUBV1"] = { Desc = "Skrip ini mencakup perubahan warna senjata, kecepatan jalan, lompat tinggi, voice chat lama, dan beberapa fitur lainnya." },
+            ["CNPHUBV2"] = { Desc = "Ini adalah versi peningkatan dari skrip pertama, dengan tambahan pemutar musik YouTube, pasar skin & penyimpan skin, dan lainnya!" },
+            ["Aimlock"] = { Desc = "Fitur Khusus Aimlock: Pilih target, kunci kamera, otomatis pindah jika mati, dan gunakan bidikan tengah!" },
+            ["Hiện thời gian game MM2, MMV"] = { Desc = "Timer Game MM2, MMV: Otomatis mendeteksi waktu pertandingan dan menampilkan hitung mundur." }
+        }
+    },
+    ["中文"] = {
+        ExecuteBtn = "启动脚本",
+        ExecutedNotify = "已激活！",
+        UpdateBtnText = "更新",
+        TimerBtnOn = "隐藏 MM2 计时器",
+        TimerBtnOff = "Hiện thời gian game MM2, MMV",
+        Update1Title = "Update 1：充满心血的开端",
+        Update1Details = "这是该脚本的第一个更新版本。创作者下定决心，花费了大量的时间和心血才完成了它！",
+        Update2Title = "Update 2：即将推出",
+        CountdownText = "距离发布还有: %d 天",
+        Update2Details = "下个月即将推出！每日倒计时直至发布。",
+        Scripts = {
+            ["CNPHUBV1"] = { Desc = "此脚本包括枪支颜色更改、移动速度提升、高跳提升、旧语音聊天以及其他一些功能。" },
+            ["CNPHUBV2"] = { Desc = "这是第一个脚本的升级版，增加了YouTube音乐播放器、皮肤商店与皮肤保存功能以及更多内容！" },
+            ["Aimlock"] = { Desc = "特殊 Aimlock 功能：选择目标锁定，若目标死亡自动切换，带有屏幕中心瞄准准星！" },
+            ["Hiện thời gian game MM2, MMV"] = { Desc = "MM2/MMV 游戏计时器：自动扫描比赛时间并在屏幕上显示倒计时。" }
+        }
+    },
+    ["ภาษาไทย"] = {
+        ExecuteBtn = "เริ่มการทำงานสคริปต์",
+        ExecutedNotify = "เปิดใช้งานแล้ว!",
+        UpdateBtnText = "อัปเดต",
+        TimerBtnOn = "ซ่อนเวลา MM2",
+        TimerBtnOff = "Hiện thời gian game MM2, MMV",
+        Update1Title = "Update 1: จุดเริ่มต้นที่เต็มไปด้วยความตั้งใจ",
+        Update1Details = "นี่คือการอัปเดตแรกของสคริปต์นี้ ผู้สร้างได้ทุ่มเทความตั้งใจ ใช้เวลาและแรงกายแรงใจอย่างมากเพื่อให้มันเกิดขึ้น!",
+        Update2Title = "Update 2: เร็วๆ นี้",
+        CountdownText = "จะมาในอีก: %d วัน",
+        Update2Details = "กำลังจะอัปเดตใน 1 เดือนข้างหน้า! นับถอยหลังแบบวันต่อวันจนกว่าจะเปิดตัว",
+        Scripts = {
+            ["CNPHUBV1"] = { Desc = "สคริปต์นี้ประกอบด้วยการเปลี่ยนสีปืน, เพิ่มความเร็วในการเดิน, กระโดดสูง, แชทเสียงเก่า และฟีเจอร์อื่นๆ อีกหลายอย่าง" },
+            ["CNPHUBV2"] = { Desc = "นี่คือเวอร์ชันอัปเกรดจากสคริปต์แรก โดยเพิ่มเครื่องเล่นเพลง YouTube, ตลาดเปลี่ยนสกิน & บันทึกสกิน และอื่นๆ อีกมากมาย!" },
+            ["Aimlock"] = { Desc = "ฟังก์ชันพิเศษ Aimlock: เลือกเป้าหมายล็อกกล้อง, เปลี่ยนเป้าอัตโนมัติหากตาย, พร้อมเป้าเล็งกลางจอ!" },
+            ["Hiện thời gian game MM2, MMV"] = { Desc = "นาฬิกา MM2, MMV: ตรวจจับเวลาในเกมอัตโนมัติและแสดงผลนับถอยหลังบนหน้าจอ" }
+        }
+    },
+    ["Español"] = {
+        ExecuteBtn = "Ejecutar Script",
+        ExecutedNotify = "¡Activado!",
+        UpdateBtnText = "Actualizar",
+        TimerBtnOn = "Ocultar Temporizador MM2",
+        TimerBtnOff = "Hiện thời gian game MM2, MMV",
+        Update1Title = "Update 1: El Comienzo",
+        Update1Details = "¡Esta es la primera actualización de este script! ¡El creador puso todo su empeño, tiempo y dedicación para hacerla realidad!",
+        Update2Title = "Update 2: Próximamente",
+        CountdownText = "Pronto en: %d días",
+        Update2Details = "¡Próxima actualización en el próximo mes! Cuenta regresiva diaria hasta su lanzamiento.",
+        Scripts = {
+            ["CNPHUBV1"] = { Desc = "Este script incluye cambio de color de armas, aumento de velocidad, salto alto, chat de voz antiguo y algunas otras funciones." },
+            ["CNPHUBV2"] = { Desc = "¡Esta es una versión mejorada del primer script con reproductor de música de YouTube, tienda y guardado de skins, y más!" },
+            ["Aimlock"] = { Desc = "¡Función especial Aimlock: Selecciona objetivo, bloquea cámara, cambia automáticamente si mueres y usa la mira central!" },
+            ["Hiện thời gian game MM2, MMV"] = { Desc = "Temporizador MM2, MMV: Escanea automáticamente el tiempo de la partida y muestra la cuenta regresiva." }
+        }
+    }
+}
+
+CurrentLang = "English"
+
+-- Quản lý Aimlock
+local activeAimlockTarget = nil
+local aimlockConnection = nil
+local targetButtonsMapping = {}
+
+local function StopAimlock()
+    activeAimlockTarget = nil
+    if aimlockConnection then
+        aimlockConnection:Disconnect()
+        aimlockConnection = nil
+    end
+    for plr, btn in pairs(targetButtonsMapping) do
+        if btn and btn.Parent then btn.Text = "Target: " .. plr.Name end
+    end
+end
+
+local function StartAimlock(targetPlayer)
+    if activeAimlockTarget == targetPlayer then
+        StopAimlock()
+        return
+    end
+    StopAimlock()
+    activeAimlockTarget = targetPlayer
+
+    if targetButtonsMapping[targetPlayer] and targetButtonsMapping[targetPlayer].Parent then
+        targetButtonsMapping[targetPlayer].Text = "[LOCKED] " .. targetPlayer.Name
+    end
+
+    aimlockConnection = RunService.RenderStepped:Connect(function()
+        if activeAimlockTarget and activeAimlockTarget.Character then
+            local humanoid = activeAimlockTarget.Character:FindFirstChildOfClass("Humanoid")
+            local rootPart = activeAimlockTarget.Character:FindFirstChild("HumanoidRootPart")
+
+            if not humanoid or humanoid.Health <= 0 or not rootPart then
+                local nextTarget = nil
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p ~= LocalPlayer and p.Character then
+                        local h = p.Character:FindFirstChildOfClass("Humanoid")
+                        local rp = p.Character:FindFirstChild("HumanoidRootPart")
+                        if h and h.Health > 0 and rp then nextTarget = p break end
+                    end
+                end
+                if nextTarget then StartAimlock(nextTarget) else StopAimlock() end
+                return
+            end
+
+            local cam = workspace.CurrentCamera
+            cam.CFrame = CFrame.new(cam.CFrame.Position, rootPart.Position)
+        else
+            StopAimlock()
+        end
+    end)
+end
+
+-- Danh sách kịch bản
+local ScriptsList = {
+    { Name = "CNPHUBV1", ImageId = "rbxassetid://13511479860", Callback = function() loadstring(game:HttpGet("https://raw.githubusercontent.com/bbbbhbb099-pixel/CNPHUB/refs/heads/main/CNPHUB"))() end },
+    { Name = "CNPHUBV2", ImageId = "rbxassetid://130299219143870", Callback = function() loadstring(game:HttpGet("https://raw.githubusercontent.com/bbbbhbb099-pixel/CNPHUBV2/refs/heads/main/CNPHUBV2"))() end },
+    { Name = "Aimlock", ImageId = "rbxassetid://13511479860", IsAimlock = true, Callback = function() end },
+    { Name = "Hiện thời gian game MM2, MMV", ImageId = "rbxassetid://13511479860", IsTimerControl = true, Callback = function() end }
+}
+
+-- Hàm tạo khung bo góc & viền trắng
+local function StyleFrame(frame, bgColor, transparency)
+    frame.BackgroundColor3 = bgColor
+    frame.BackgroundTransparency = transparency or 0.5
+    frame.BorderSizePixel = 0
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 12)
+    corner.Parent = frame
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(255, 255, 255)
+    stroke.Thickness = 2
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    stroke.Parent = frame
+end
+
+-- Hàm kéo thả
+local function MakeDraggable(frame)
+    local dragging, dragInput, dragStart, startPos
+    frame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end)
+    frame.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then dragInput = input end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - dragStart
+            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+end
+
+local SkyBlue = Color3.fromRGB(0, 170, 255)
+local SoftPink = Color3.fromRGB(255, 105, 180)
+
+-- BẢNG CHỌN NGÔN NGỮ
+local LangFrame = Instance.new("Frame")
+LangFrame.Size = UDim2.new(0, 360, 0, 230)
+LangFrame.Position = UDim2.new(0.5, -180, 0.5, -115)
+LangFrame.Parent = ScreenGui
+StyleFrame(LangFrame, SkyBlue, 0.5)
+MakeDraggable(LangFrame)
+
+local LangTitle = Instance.new("TextLabel")
+LangTitle.Size = UDim2.new(1, 0, 0, 40)
+LangTitle.Position = UDim2.new(0, 0, 0, 8)
+LangTitle.BackgroundTransparency = 1
+LangTitle.Text = "Select Language / Chọn Ngôn Ngữ"
+LangTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+LangTitle.Font = Enum.Font.GothamBold
+LangTitle.TextSize = 17
+LangTitle.Parent = LangFrame
+
+local LangGrid = Instance.new("Frame")
+LangGrid.Size = UDim2.new(0.9, 0, 0, 165)
+LangGrid.Position = UDim2.new(0.05, 0, 0, 50)
+LangGrid.BackgroundTransparency = 1
+LangGrid.Parent = LangFrame
+
+local GridLayout = Instance.new("UIGridLayout")
+GridLayout.CellSize = UDim2.new(0.47, 0, 0, 45)
+GridLayout.CellPadding = UDim2.new(0.06, 0, 0, 10)
+GridLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+GridLayout.Parent = LangGrid
+
+-- MENU CHÍNH
+local MainMenu = Instance.new("Frame")
+MainMenu.Size = UDim2.new(0, 560, 0, 330)
+MainMenu.Position = UDim2.new(0.5, -280, 0.5, -165)
+MainMenu.Visible = false
+MainMenu.ClipsDescendants = true
+MainMenu.Parent = ScreenGui
+StyleFrame(MainMenu, SoftPink, 0.5)
+MakeDraggable(MainMenu)
+
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.new(0, 30, 0, 30)
+CloseBtn.Position = UDim2.new(1, -38, 0, 8)
+CloseBtn.Text = "X"
+CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 16
+CloseBtn.Parent = MainMenu
+StyleFrame(CloseBtn, Color3.fromRGB(255, 60, 100), 0.3)
+
+CloseBtn.MouseButton1Click:Connect(function()
+    local closeTween = TweenService:Create(MainMenu, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.In), {Size = UDim2.new(0, 0, 0, 0)})
+    closeTween:Play()
+    closeTween.Completed:Wait()
+    MainMenu.Visible = false
+    Crosshair.Visible = false
+end)
+
+local UpdateToggleBtn = Instance.new("TextButton")
+UpdateToggleBtn.Size = UDim2.new(0, 85, 0, 30)
+UpdateToggleBtn.Position = UDim2.new(1, -128, 0, 8)
+UpdateToggleBtn.Text = Languages[CurrentLang].UpdateBtnText
+UpdateToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+UpdateToggleBtn.Font = Enum.Font.GothamBold
+UpdateToggleBtn.TextSize = 13
+UpdateToggleBtn.Parent = MainMenu
+StyleFrame(UpdateToggleBtn, Color3.fromRGB(200, 50, 150), 0.3)
+
+local LeftColumn = Instance.new("ScrollingFrame")
+LeftColumn.Size = UDim2.new(0.34, 0, 1, -20)
+LeftColumn.Position = UDim2.new(0, 10, 0, 10)
+LeftColumn.ScrollBarThickness = 4
+LeftColumn.ScrollBarImageColor3 = Color3.fromRGB(255, 255, 255)
+LeftColumn.CanvasSize = UDim2.new(0, 0, 0, #ScriptsList * 48)
+LeftColumn.Parent = MainMenu
+StyleFrame(LeftColumn, Color3.fromRGB(255, 130, 195), 0.55)
+
+local UIListLayout = Instance.new("UIListLayout")
+UIListLayout.Padding = UDim.new(0, 8)
+UIListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+UIListLayout.Parent = LeftColumn
+
+local UIPadding = Instance.new("UIPadding")
+UIPadding.PaddingTop = UDim.new(0, 8)
+UIPadding.Parent = LeftColumn
+
+local RightColumn = Instance.new("Frame")
+RightColumn.Size = UDim2.new(0.61, 0, 1, -20)
+RightColumn.Position = UDim2.new(0.37, 0, 0, 10)
+RightColumn.Parent = MainMenu
+StyleFrame(RightColumn, Color3.fromRGB(255, 130, 195), 0.55)
+
+local MainContentHolder = Instance.new("Frame")
+MainContentHolder.Size = UDim2.new(1, 0, 1, -10)
+MainContentHolder.Position = UDim2.new(0, 0, 0, 5)
+MainContentHolder.BackgroundTransparency = 1
+MainContentHolder.Parent = RightColumn
+
+local ScriptDescLabel = Instance.new("TextLabel")
+ScriptDescLabel.Size = UDim2.new(1, -20, 0, 65)
+ScriptDescLabel.Position = UDim2.new(0, 10, 0, 2)
+ScriptDescLabel.BackgroundTransparency = 1
+ScriptDescLabel.Text = Languages[CurrentLang].Scripts["CNPHUBV1"].Desc
+ScriptDescLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+ScriptDescLabel.Font = Enum.Font.GothamSemibold
+ScriptDescLabel.TextSize = 12
+ScriptDescLabel.TextWrapped = true
+ScriptDescLabel.TextXAlignment = Enum.TextXAlignment.Left
+ScriptDescLabel.TextYAlignment = Enum.TextYAlignment.Top
+ScriptDescLabel.Parent = MainContentHolder
+
+local PreviewImage = Instance.new("ImageLabel")
+PreviewImage.Size = UDim2.new(0.9, 0, 0, 140)
+PreviewImage.Position = UDim2.new(0.05, 0, 0, 70)
+PreviewImage.Image = ""
+PreviewImage.ScaleType = Enum.ScaleType.Fit
+PreviewImage.Parent = MainContentHolder
+StyleFrame(PreviewImage, Color3.fromRGB(255, 180, 220), 0.4)
+
+local ExecuteButton = Instance.new("TextButton")
+ExecuteButton.Size = UDim2.new(0.8, 0, 0, 40)
+ExecuteButton.Position = UDim2.new(0.1, 0, 1, -45)
+ExecuteButton.Text = "Execute Script"
+ExecuteButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+ExecuteButton.Font = Enum.Font.GothamBold
+ExecuteButton.TextSize = 15
+ExecuteButton.Parent = MainContentHolder
+StyleFrame(ExecuteButton, Color3.fromRGB(255, 50, 140), 0.25)
+
+-- MENU AIMLOCK
+local AimlockMenuHolder = Instance.new("ScrollingFrame")
+AimlockMenuHolder.Size = UDim2.new(1, -10, 1, -55)
+AimlockMenuHolder.Position = UDim2.new(0, 5, 0, 50)
+AimlockMenuHolder.BackgroundTransparency = 1
+AimlockMenuHolder.Visible = false
+AimlockMenuHolder.ScrollBarThickness = 4
+AimlockMenuHolder.ScrollBarImageColor3 = Color3.fromRGB(255, 255, 255)
+AimlockMenuHolder.Parent = RightColumn
+
+local AimlockListLayout = Instance.new("UIListLayout")
+AimlockListLayout.Padding = UDim.new(0, 6)
+AimlockListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+AimlockListLayout.Parent = AimlockMenuHolder
+
+local function RefreshAimlockList()
+    targetButtonsMapping = {}
+    for _, child in ipairs(AimlockMenuHolder:GetChildren()) do
+        if child:IsA("TextButton") then child:Destroy() end
+    end
+
+    local count = 0
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            count = count + 1
+            local PlrBtn = Instance.new("TextButton")
+            PlrBtn.Size = UDim2.new(0.95, 0, 0, 35)
+            PlrBtn.Text = (activeAimlockTarget == plr) and ("[LOCKED] " .. plr.Name) or ("Target: " .. plr.Name)
+            PlrBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+            PlrBtn.Font = Enum.Font.GothamBold
+            PlrBtn.TextSize = 13
+            PlrBtn.Parent = AimlockMenuHolder
+            StyleFrame(PlrBtn, Color3.fromRGB(220, 50, 130), 0.3)
+
+            targetButtonsMapping[plr] = PlrBtn
+
+            PlrBtn.MouseButton1Click:Connect(function()
+                StartAimlock(plr)
+                for p, btn in pairs(targetButtonsMapping) do
+                    if btn and btn.Parent then
+                        btn.Text = (activeAimlockTarget == p) and ("[LOCKED] " .. p.Name) or ("Target: " .. p.Name)
+                    end
+                end
+            end)
+        end
+    end
+    AimlockMenuHolder.CanvasSize = UDim2.new(0, 0, 0, count * 42)
+end
+
+-- KHUNG UPDATE
+local UpdateContentHolder = Instance.new("ScrollingFrame")
+UpdateContentHolder.Size = UDim2.new(1, 0, 1, -10)
+UpdateContentHolder.Position = UDim2.new(0, 0, 0, 5)
+UpdateContentHolder.BackgroundTransparency = 1
+UpdateContentHolder.Visible = false
+UpdateContentHolder.ScrollBarThickness = 4
+UpdateContentHolder.ScrollBarImageColor3 = Color3.fromRGB(255, 255, 255)
+UpdateContentHolder.CanvasSize = UDim2.new(0, 0, 0, 450)
+UpdateContentHolder.Parent = RightColumn
+
+local Up1Img = Instance.new("ImageLabel")
+Up1Img.Size = UDim2.new(0.9, 0, 0, 110)
+Up1Img.Position = UDim2.new(0.05, 0, 0, 10)
+Up1Img.Image = Update1ImageId
+Up1Img.ScaleType = Enum.ScaleType.Fit
+Up1Img.Parent = UpdateContentHolder
+StyleFrame(Up1Img, Color3.fromRGB(255, 180, 220), 0.4)
+
+local Up1Text = Instance.new("TextLabel")
+Up1Text.Size = UDim2.new(0.9, 0, 0, 85)
+Up1Text.Position = UDim2.new(0.05, 0, 0, 125)
+Up1Text.BackgroundTransparency = 1
+Up1Text.Text = Languages[CurrentLang].Update1Title .. "\n\n" .. Languages[CurrentLang].Update1Details
+Up1Text.TextColor3 = Color3.fromRGB(255, 255, 255)
+Up1Text.Font = Enum.Font.GothamMedium
+Up1Text.TextSize = 12
+Up1Text.TextWrapped = true
+Up1Text.TextXAlignment = Enum.TextXAlignment.Center
+Up1Text.TextYAlignment = Enum.TextYAlignment.Top
+Up1Text.Parent = UpdateContentHolder
+
+local Up2Img = Instance.new("ImageLabel")
+Up2Img.Size = UDim2.new(0.9, 0, 0, 110)
+Up2Img.Position = UDim2.new(0.05, 0, 0, 215)
+Up2Img.Image = Update2ImageId
+Up2Img.ScaleType = Enum.ScaleType.Fit
+Up2Img.Parent = UpdateContentHolder
+StyleFrame(Up2Img, Color3.fromRGB(255, 180, 220), 0.4)
+
+local Up2Text = Instance.new("TextLabel")
+Up2Text.Size = UDim2.new(0.9, 0, 0, 85)
+Up2Text.Position = UDim2.new(0.05, 0, 0, 330)
+Up2Text.BackgroundTransparency = 1
+Up2Text.Text = Languages[CurrentLang].Update2Title .. "\n" .. string.format(Languages[CurrentLang].CountdownText, 31) .. "\n" .. Languages[CurrentLang].Update2Details
+Up2Text.TextColor3 = Color3.fromRGB(255, 255, 255)
+Up2Text.Font = Enum.Font.GothamMedium
+Up2Text.TextSize = 12
+Up2Text.TextWrapped = true
+Up2Text.TextXAlignment = Enum.TextXAlignment.Center
+Up2Text.TextYAlignment = Enum.TextYAlignment.Top
+Up2Text.Parent = UpdateContentHolder
+
+local isViewingUpdate = false
+
+UpdateToggleBtn.MouseButton1Click:Connect(function()
+    isViewingUpdate = not isViewingUpdate
+    if isViewingUpdate then
+        MainContentHolder.Visible = false
+        AimlockMenuHolder.Visible = false
+        UpdateContentHolder.Visible = true
+        UpdateToggleBtn.Text = (CurrentLang == "Tiếng Việt" and "Quay Lại" or "Back")
+    else
+        UpdateContentHolder.Visible = false
+        if SelectedScript and SelectedScript.IsAimlock then
+            MainContentHolder.Visible = false
+            AimlockMenuHolder.Visible = true
+        elseif SelectedScript and SelectedScript.IsTimerControl then
+            MainContentHolder.Visible = true
+            AimlockMenuHolder.Visible = false
+            PreviewImage.Visible = false
+        else
+            MainContentHolder.Visible = true
+            AimlockMenuHolder.Visible = false
+            PreviewImage.Visible = true
+        end
+        UpdateToggleBtn.Text = Languages[CurrentLang].UpdateBtnText
+    end
+end)
+
+local SelectedScript = ScriptsList[1]
+
+for _, item in ipairs(ScriptsList) do
+    local TabBtn = Instance.new("TextButton")
+    TabBtn.Size = UDim2.new(0.9, 0, 0, 40)
+    TabBtn.Text = item.Name
+    TabBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    TabBtn.Font = Enum.Font.GothamBold
+    TabBtn.TextSize = 14
+    TabBtn.TextWrapped = true
+    TabBtn.Parent = LeftColumn
+    StyleFrame(TabBtn, Color3.fromRGB(255, 90, 170), 0.4)
+
+    TabBtn.MouseButton1Click:Connect(function()
+        SelectedScript = item
+        isViewingUpdate = false
+        UpdateContentHolder.Visible = false
+        UpdateToggleBtn.Text = Languages[CurrentLang].UpdateBtnText
+
+        if Languages[CurrentLang].Scripts[item.Name] then
+            ScriptDescLabel.Text = Languages[CurrentLang].Scripts[item.Name].Desc
+        end
+
+        if item.IsAimlock then
+            MainContentHolder.Visible = false
+            AimlockMenuHolder.Visible = true
+            RefreshAimlockList()
+        elseif item.IsTimerControl then
+            MainContentHolder.Visible = true
+            AimlockMenuHolder.Visible = false
+            PreviewImage.Visible = false
+            ExecuteButton.Text = isTimerRunning and Languages[CurrentLang].TimerBtnOn or Languages[CurrentLang].TimerBtnOff
+        else
+            MainContentHolder.Visible = true
+            AimlockMenuHolder.Visible = false
+            PreviewImage.Visible = true
+            PreviewImage.Image = item.ImageId
+            ExecuteButton.Text = Languages[CurrentLang].ExecuteBtn
+        end
+    end)
+end
+
+if ScriptsList[1] then
+    ScriptDescLabel.Text = Languages[CurrentLang].Scripts[ScriptsList[1].Name].Desc
+    PreviewImage.Image = ScriptsList[1].ImageId
+end
+
+ExecuteButton.MouseButton1Click:Connect(function()
+    if SelectedScript then
+        if SelectedScript.IsAimlock then
+            RefreshAimlockList()
+            ExecuteButton.Text = Languages[CurrentLang].ExecutedNotify
+            task.wait(1.2)
+            ExecuteButton.Text = Languages[CurrentLang].ExecuteBtn
+        elseif SelectedScript.IsTimerControl then
+            isTimerRunning = not isTimerRunning
+            TimerLabel.Visible = isTimerRunning
+            ExecuteButton.Text = isTimerRunning and Languages[CurrentLang].TimerBtnOn or Languages[CurrentLang].TimerBtnOff
+        elseif SelectedScript.Callback then
+            local originalText = Languages[CurrentLang].ExecuteBtn
+            ExecuteButton.Text = Languages[CurrentLang].ExecutedNotify
+            task.spawn(SelectedScript.Callback)
+            task.wait(1.2)
+            ExecuteButton.Text = originalText
+        end
+    end
+end)
+
+-- Nút tròn bật/tắt menu
+local ToggleButton = Instance.new("TextButton")
+ToggleButton.Name = "ToggleButton"
+ToggleButton.Size = UDim2.new(0, 50, 0, 50)
+ToggleButton.Position = UDim2.new(0, 30, 0.5, -25)
+ToggleButton.Visible = false
+ToggleButton.Text = "CNP"
+ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleButton.Font = Enum.Font.GothamBold
+ToggleButton.TextSize = 14
+ToggleButton.Parent = ScreenGui
+
+StyleFrame(ToggleButton, Color3.fromRGB(255, 105, 180), 0.3)
+local roundCorner = Instance.new("UICorner")
+roundCorner.CornerRadius = UDim.new(1, 0)
+roundCorner.Parent = ToggleButton
+
+MakeDraggable(ToggleButton)
+
+ToggleButton.MouseButton1Click:Connect(function()
+    if MainMenu.Visible then
+        local closeTween = TweenService:Create(MainMenu, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.In), {Size = UDim2.new(0, 0, 0, 0)})
+        closeTween:Play()
+        closeTween.Completed:Wait()
+        MainMenu.Visible = false
+        Crosshair.Visible = false
+    else
+        MainMenu.Size = UDim2.new(0, 0, 0, 0)
+        MainMenu.Position = UDim2.new(0.5, -280, 0.5, -165)
+        MainMenu.Visible = true
+        Crosshair.Visible = true
+
+        local openTween = TweenService:Create(MainMenu, TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.new(0, 560, 0, 330)})
+        openTween:Play()
+    end
+end)
+
+-- Cập nhật ngôn ngữ
+local LangOrder = {"Tiếng Việt", "English", "Indonesia", "中文", "ภาษาไทย", "Español"}
+
+for _, langName in ipairs(LangOrder) do
+    local LBtn = Instance.new("TextButton")
+    LBtn.Text = langName
+    LBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    LBtn.Font = Enum.Font.GothamBold
+    LBtn.TextSize = 16
+    LBtn.Parent = LangGrid
+    StyleFrame(LBtn, Color3.fromRGB(0, 140, 220), 0.35)
+
+    LBtn.MouseButton1Click:Connect(function()
+        CurrentLang = langName
+        
+        if SelectedScript and SelectedScript.IsTimerControl then
+            ExecuteButton.Text = isTimerRunning and Languages[CurrentLang].TimerBtnOn or Languages[CurrentLang].TimerBtnOff
+        else
+            ExecuteButton.Text = Languages[CurrentLang].ExecuteBtn
+        end
+        
+        if SelectedScript and Languages[CurrentLang].Scripts[SelectedScript.Name] then
+            ScriptDescLabel.Text = Languages[CurrentLang].Scripts[SelectedScript.Name].Desc
+        end
+        
+        Up1Text.Text = Languages[CurrentLang].Update1Title .. "\n\n" .. Languages[CurrentLang].Update1Details
+        Up2Text.Text = Languages[CurrentLang].Update2Title .. "\n" .. string.format(Languages[CurrentLang].CountdownText, 31) .. "\n" .. Languages[CurrentLang].Update2Details
+        
+        if not isViewingUpdate then
+            UpdateToggleBtn.Text = Languages[CurrentLang].UpdateBtnText
+        end
+
+        LangFrame.Visible = false
+        ToggleButton.Visible = true
+        Crosshair.Visible = true
+
+        MainMenu.Size = UDim2.new(0, 0, 0, 0)
+        MainMenu.Visible = true
+
+        local openTween = TweenService:Create(MainMenu, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+            Size = UDim2.new(0, 560, 0, 330),
+            Position = UDim2.new(0.5, -280, 0.5, -165)
+        })
+        openTween:Play()
+    end)
+end
